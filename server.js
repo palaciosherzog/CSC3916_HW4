@@ -13,6 +13,7 @@ var jwt = require('jsonwebtoken');
 var cors = require('cors');
 var User = require('./Users');
 var Movie = require('./Movies');
+var Review = require('./Reviews');
 
 var app = express();
 app.use(cors());
@@ -25,10 +26,7 @@ var router = express.Router();
 
 router.post('/signup', function (req, res) {
     if (!req.body.username || !req.body.password) {
-        res.json({
-            success: false,
-            msg: 'Please include both username and password to signup.'
-        });
+        res.json({ success: false, msg: 'Please include both username and password to signup.' });
     } else {
         var user = new User();
         user.name = req.body.name;
@@ -38,10 +36,7 @@ router.post('/signup', function (req, res) {
         user.save(function (err) {
             if (err) {
                 if (err.code == 11000)
-                    return res.json({
-                        success: false,
-                        message: 'A user with that username already exists.'
-                    });
+                    return res.json({ success: false, msg: 'A user with that username already exists.' });
                 else return res.json(err);
             }
 
@@ -61,7 +56,7 @@ router.post('/signin', function (req, res) {
             if (err) {
                 res.send(err);
             } else if (!userNew.username || !userNew.password || !user) {
-                res.status(401).json({ success: false, msg: 'Authentication failed.'})
+                res.status(401).json({ success: false, msg: 'Authentication failed.' });
             } else {
                 user.comparePassword(userNew.password, function (isMatch) {
                     if (isMatch) {
@@ -69,10 +64,7 @@ router.post('/signin', function (req, res) {
                         var token = jwt.sign(userToken, process.env.SECRET_KEY);
                         res.json({ success: true, token: 'JWT ' + token });
                     } else {
-                        res.status(401).send({
-                            success: false,
-                            msg: 'Authentication failed.'
-                        });
+                        res.status(401).send({ success: false, msg: 'Authentication failed.' });
                     }
                 });
             }
@@ -80,38 +72,59 @@ router.post('/signin', function (req, res) {
 });
 
 router
-    .route('/movies/*') // route things that have movies and then content after it through here
+    .route('/movies/:title') // route things that have movies and then a title through here
     .get(authJwtController.isAuthenticated, function (req, res) {
-        Movie.findOne({ title: req.params['0'] }, (err, movie) => {
-            if (err) res.status(400).json(err);
-            else res.json(movie);
-        });
+        if ('reviews' in req.query && req.query['reviews'] === 'true') {
+            Movie.aggregate([
+                {
+                    $match: {
+                        title: req.params['title']
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'reviews',
+                        localField: 'title',
+                        foreignField: 'movieTitle',
+                        as: 'reviews'
+                    }
+                },
+                {
+                    $addFields: {
+                        avgRating: { $avg: '$reviews.rating' }
+                    }
+                }
+            ]).exec(function (err, movies) {
+                //console.log("match movies", movies.filter((m) => m.title === req.params['title']));
+                if (err) return res.status(400).json(err);
+                else if (movies.length === 0)
+                    return res.status(400).json({ success: false, msg: 'No movie with that title exists.' });
+                else res.json(movies[0]);
+            });
+        } else {
+            Movie.findOne({ title: req.params['title'] }, (err, movie) => {
+                if (err) res.status(400).json(err);
+                else if (!movie)
+                    return res.status(400).json({ success: false, msg: 'No movie with that title exists.' });
+                else res.json(movie);
+            });
+        }
     })
     .put(authJwtController.isAuthenticated, function (req, res) {
-        Movie.updateOne({ title: req.params['0'] }, req.body, { runValidators: true }, (err, movie) => {
-            if (err) 
-                res.status(400).json({ success: false, msg: err.message });
+        Movie.updateOne({ title: req.params['title'] }, req.body, { runValidators: true }, (err, movie) => {
+            if (err) res.status(400).json({ success: false, msg: err.message });
             else if (movie.nModified === 0)
-                res.status(400).json({ success: false, msg: 'No movie with that title exists.'});
-            else
-                res.json({
-                    success: true,
-                    msg: 'Successfully updated movie.'
-                });
+                res.status(400).json({ success: false, msg: 'No movie with that title exists.' });
+            else res.json({ success: true, msg: 'Successfully updated movie.' });
         });
     })
     .delete(authJwtController.isAuthenticated, function (req, res) {
-        Movie.deleteOne({ title: req.params['0'] }, (err, movie) => {
-            if (err)
-                res.status(400).json({ success: false, msg: err.message });
+        Movie.deleteOne({ title: req.params['title'] }, (err, movie) => {
+            if (err) res.status(400).json({ success: false, msg: err.message });
             else if (movie.deletedCount === 0)
-                res.status(400).json({ success: false, msg: 'No movie with that title exists.'});
-            else
-                res.json({
-                    success: true,
-                    msg: 'Successfully deleted movie.'
-                });
-            });
+                res.status(400).json({ success: false, msg: 'No movie with that title exists.' });
+            else res.json({ success: true, msg: 'Successfully deleted movie.' });
+        });
     });
 
 router
@@ -120,23 +133,63 @@ router
         var newMovie = new Movie(req.body);
         newMovie.save(function (err) {
             if (err) res.status(400).json({ success: false, msg: err.message });
-            else
-                res.json({
-                    success: true,
-                    msg: 'Successfully created new movie.'
-                });
+            else res.json({ success: true, msg: 'Successfully created new movie.' });
         });
     })
     .get(authJwtController.isAuthenticated, function (req, res) {
-        Movie.find({}, (err, movies) => {
+        if ('reviews' in req.query && req.query['reviews'] === 'true') {
+            Movie.aggregate([
+                {
+                    $lookup: {
+                        from: 'reviews',
+                        localField: 'title',
+                        foreignField: 'movieTitle',
+                        as: 'reviews'
+                    }
+                },
+                {
+                    $addFields: {
+                        avgRating: { $avg: '$reviews.rating' }
+                    }
+                }
+            ]).exec(function (err, movies) {
+                if (err) return res.status(400).json(err);
+                else res.json(movies);
+            });
+        } else {
+            Movie.find({}, (err, movies) => {
+                if (err) return res.status(400).json(err);
+                else res.json(movies);
+            });
+        }
+    });
+
+router
+    .route('/reviews') // route for movies with no arguments
+    .post(authJwtController.isAuthenticated, function (req, res) {
+        // ensure movie in database before posting review
+        Movie.findOne({ title: req.body.movieTitle }, (err, movie) => {
+            if (err) res.status(400).json(err);
+            else if (!movie) return res.status(400).json({ success: false, msg: 'No movie with that title exists.' });
+            else {
+                var newReview = new Review({ ...req.body, username: req.user.username });
+                newReview.save(function (err) {
+                    if (err) res.status(400).json({ success: false, msg: err.message });
+                    else res.json({ success: true, msg: 'Successfully posted new review.' });
+                });
+            }
+        });
+    })
+    .get(authJwtController.isAuthenticated, function (req, res) {
+        Review.find({}, (err, reviews) => {
             if (err) return res.status(400).json(err);
-            else res.json(movies);
+            else res.json(reviews);
         });
     });
 
 app.use('/', router);
 
-app.use( (req, res) => res.status(405).send('Method not allowed') );
+app.use((req, res) => res.status(405).send('Method not allowed'));
 
 app.listen(process.env.PORT || 8080);
 //module.exports = app; // for testing only
